@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Assignment 3 - Data Interactions</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #controls { margin-bottom: 20px; padding: 15px; background: #f4f4f4; border-radius: 8px; }
+        button, select { margin-right: 10px; padding: 5px 10px; cursor: pointer; }
+        svg { background: #fff; border: 1px solid #ccc; }
+        .tooltip {
+            position: absolute; text-align: center; padding: 8px; font-size: 12px;
+            background: rgba(0,0,0,0.8); color: #fff; border-radius: 4px;
+            pointer-events: none; opacity: 0; transition: opacity 0.2s;
+        }
+        .dot { stroke: #fff; stroke-width: 1px; cursor: pointer; }
+        .dot.selected { stroke: #000; stroke-width: 3px; }
+        .line { fill: none; stroke: #ff7f0e; stroke-width: 2px; }
+    </style>
+</head>
+<body>
+
+    <h2>Tech Startup Analytics Dashboard</h2>
+    <div id="controls">
+        <label><strong>Filter</strong> (Category): </label>
+        <select id="filterSelect">
+            <option value="all">All</option>
+            <option value="A">Product A</option>
+            <option value="B">Product B</option>
+            <option value="C">Product C</option>
+        </select>
+
+        <label><strong>Encode</strong> (Size): </label>
+        <button id="encodeBtn">Toggle Size by Revenue</button>
+
+        <label><strong>Connect</strong>: </label>
+        <button id="connectBtn">Show Trend Line</button>
+
+        <label><strong>Reconfigure</strong>: </label>
+        <button id="reconfigBtn">Swap Axes</button>
+
+        <label><strong>Abstract</strong>: </label>
+        <button id="abstractBtn">Show Averages (Bar Chart)</button>
+    </div>
+
+    <div id="chart"></div>
+    <div id="tooltip" class="tooltip"></div>
+
+    <script>
+        // 1. Generate Dataset (1200 rows)
+        const data = [];
+        const categories = ["A", "B", "C"];
+        for(let i=0; i<1200; i++) {
+            data.push({
+                id: i,
+                engagement: Math.random() * 100,
+                activeTime: Math.random() * 100,
+                revenue: Math.random() * 1000 + 100,
+                category: categories[Math.floor(Math.random() * categories.length)],
+                date: new Date(2023, 0, 1 + i) // Sequential dates for connection
+            });
+        }
+
+        // Setup SVG
+        const margin = {top: 20, right: 30, bottom: 50, left: 60},
+              width = 800 - margin.left - margin.right,
+              height = 500 - margin.top - margin.bottom;
+
+        const svg = d3.select("#chart").append("svg")
+            .attr("width", width + margin.left + margin.right)
+            .attr("height", height + margin.top + margin.bottom)
+            .append("g")
+            .attr("transform", `translate(${margin.left},${margin.top})`);
+
+        const tooltip = d3.select("#tooltip");
+
+        // Scales
+        let xVar = "engagement";
+        let yVar = "activeTime";
+        let isEncoded = false;
+        let isConnected = false;
+        let isAbstracted = false;
+
+        const x = d3.scaleLinear().range([0, width]);
+        const y = d3.scaleLinear().range([height, 0]);
+        const color = d3.scaleOrdinal(d3.schemeCategory10);
+        const size = d3.scaleSqrt().domain([100, 1100]).range([3, 10]);
+
+        const xAxisGroup = svg.append("g").attr("transform", `translate(0,${height})`);
+        const yAxisGroup = svg.append("g");
+        const path = svg.append("path").attr("class", "line");
+
+        function update(filteredData) {
+            if(isAbstracted) return; // Handle abstraction separately
+
+            x.domain(d3.extent(filteredData, d => d[xVar])).nice();
+            y.domain(d3.extent(filteredData, d => d[yVar])).nice();
+
+            xAxisGroup.transition().duration(1000).call(d3.axisBottom(x));
+            yAxisGroup.transition().duration(1000).call(d3.axisLeft(y));
+
+            // Data Join
+            const circles = svg.selectAll(".dot").data(filteredData, d => d.id);
+
+            // Exit
+            circles.exit().transition().duration(500).attr("r", 0).remove();
+
+            // Enter & Update
+            circles.enter().append("circle")
+                .attr("class", "dot")
+                .attr("cx", d => x(d[xVar]))
+                .attr("cy", d => y(d[yVar]))
+                .attr("r", 0)
+                .style("fill", d => color(d.category))
+                // Elaborate: Tooltip on hover
+                .on("mouseover", function(event, d) {
+                    tooltip.transition().duration(200).style("opacity", .9);
+                    tooltip.html(`Category: ${d.category}<br>${xVar}: ${d[xVar].toFixed(1)}<br>${yVar}: ${d[yVar].toFixed(1)}<br>Rev: $${d.revenue.toFixed(0)}`)
+                        .style("left", (event.pageX + 10) + "px")
+                        .style("top", (event.pageY - 28) + "px");
+                    d3.select(this).style("opacity", 0.7);
+                })
+                .on("mouseout", function() {
+                    tooltip.transition().duration(500).style("opacity", 0);
+                    d3.select(this).style("opacity", 1);
+                })
+                // Select: Highlight on click
+                .on("click", function(event, d) {
+                    const isActive = d3.select(this).classed("selected");
+                    d3.selectAll(".dot").classed("selected", false);
+                    d3.select(this).classed("selected", !isActive);
+                })
+                .merge(circles)
+                .transition().duration(1000)
+                .attr("cx", d => x(d[xVar]))
+                .attr("cy", d => y(d[yVar]))
+                // Encode: Change size based on revenue
+                .attr("r", d => isEncoded ? size(d.revenue) : 4);
+
+            // Connect: Draw trend line based on sequential data
+            if(isConnected) {
+                const sortedData = [...filteredData].sort((a,b) => d3.ascending(a[xVar], b[xVar]));
+                const valueline = d3.line()
+                    .x(d => x(d[xVar]))
+                    .y(d => y(d[yVar]));
+                path.datum(sortedData).transition().duration(1000).attr("d", valueline).style("opacity", 1);
+            } else {
+                path.style("opacity", 0);
+            }
+        }
+
+        // Abstract: Show Aggregated Bar Chart
+        function showAbstract() {
+            svg.selectAll(".dot").remove();
+            path.style("opacity", 0);
+            
+            const rollups = d3.rollups(data, v => d3.mean(v, d => d.engagement), d => d.category);
+            
+            const xBar = d3.scaleBand().domain(rollups.map(d => d[0])).range([0, width]).padding(0.2);
+            const yBar = d3.scaleLinear().domain([0, d3.max(rollups, d => d[1])]).nice().range([height, 0]);
+
+            xAxisGroup.transition().duration(1000).call(d3.axisBottom(xBar));
+            yAxisGroup.transition().duration(1000).call(d3.axisLeft(yBar));
+
+            const bars = svg.selectAll(".bar").data(rollups);
+            bars.enter().append("rect").attr("class", "bar")
+                .attr("x", d => xBar(d[0]))
+                .attr("y", height)
+                .attr("width", xBar.bandwidth())
+                .attr("height", 0)
+                .style("fill", d => color(d[0]))
+                .merge(bars)
+                .transition().duration(1000)
+                .attr("x", d => xBar(d[0]))
+                .attr("y", d => yBar(d[1]))
+                .attr("height", d => height - yBar(d[1]));
+        }
+
+        // Initial render
+        update(data);
+
+        // Interaction Listeners
+        // Filter
+        d3.select("#filterSelect").on("change", function() {
+            if(isAbstracted) return;
+            const selected = this.value;
+            const filtered = selected === "all" ? data : data.filter(d => d.category === selected);
+            update(filtered);
+        });
+
+        // Encode
+        d3.select("#encodeBtn").on("click", () => {
+            if(isAbstracted) return;
+            isEncoded = !isEncoded;
+            update(d3.select("#filterSelect").property("value") === "all" ? data : data.filter(d => d.category === d3.select("#filterSelect").property("value")));
+        });
+
+        // Connect
+        d3.select("#connectBtn").on("click", () => {
+            if(isAbstracted) return;
+            isConnected = !isConnected;
+            update(d3.select("#filterSelect").property("value") === "all" ? data : data.filter(d => d.category === d3.select("#filterSelect").property("value")));
+        });
+
+        // Reconfigure
+        d3.select("#reconfigBtn").on("click", () => {
+            if(isAbstracted) return;
+            [xVar, yVar] = [yVar, xVar]; // Swap axes
+            update(d3.select("#filterSelect").property("value") === "all" ? data : data.filter(d => d.category === d3.select("#filterSelect").property("value")));
+        });
+
+        // Abstract
+        d3.select("#abstractBtn").on("click", function() {
+            isAbstracted = !isAbstracted;
+            if(isAbstracted) {
+                d3.select(this).text("Show Raw Data (Scatter)");
+                showAbstract();
+            } else {
+                d3.select(this).text("Show Averages (Bar Chart)");
+                svg.selectAll(".bar").remove();
+                update(d3.select("#filterSelect").property("value") === "all" ? data : data.filter(d => d.category === d3.select("#filterSelect").property("value")));
+            }
+        });
+
+    </script>
+</body>
+</html>
